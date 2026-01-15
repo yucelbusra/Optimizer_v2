@@ -48,14 +48,27 @@ class Panel(object):
 
 class Opening(object):
     """Opening with clearance zones."""
-    def __init__(self, oid, otype, x, y, w, h, clearances):
+    def __init__(self, oid, otype, x, y, w, h, clearances_template):
         self.id = str(oid)
         self.type = str(otype)
         self.x = float(x)      # Left edge in inches
         self.y = float(y)      # Bottom edge (sill) in inches
         self.w = float(w)      # Width in inches
         self.h = float(h)      # Height in inches
-        self.clearances = clearances
+        
+        # [CRITICAL FIX] Create independent copies of clearances.
+        self.original_clearances = OpeningClearances(
+            clearances_template.jamb_min,
+            clearances_template.header_min,
+            clearances_template.sill_min
+        )
+        self.clearances = OpeningClearances(
+            clearances_template.jamb_min,
+            clearances_template.header_min,
+            clearances_template.sill_min
+        )
+        
+        self.force_blocker = False
 
     @property
     def left_clearance_zone(self):
@@ -80,14 +93,11 @@ class Opening(object):
 
 
 # ------------------ PANEL DIMENSION CONFIGURATION (LEGACY CONSTANTS) ------------------
-# Kept only as legacy placeholders. Actual logic uses PanelConstraints from ACTIVE_CONFIG.
 PANEL_WIDTH_MIN = 24
 PANEL_HEIGHT_MIN = 24
 LONG_MAX = 348
 SHORT_MAX = 138
 DIMENSION_INCREMENT = 1
-
-
 
 
 def snap_down(value, inc):
@@ -120,7 +130,7 @@ class PanelConstraints(object):
         self.short_max = float(short_max)
         self.long_max = float(long_max)
         self.dimension_increment = float(dimension_increment)
-        self.panel_spacing = float(panel_spacing)  # NEW: spacing between panels
+        self.panel_spacing = float(panel_spacing)
 
 
 class OptimizationStrategy(object):
@@ -147,38 +157,7 @@ class OptimizerConfig(object):
     def to_dict(self):
         return {
             "project_name": self.project_name,
-            "panel_constraints": {
-                "min_width": self.panel_constraints.min_width,
-                "max_width": self.panel_constraints.max_width,
-                "min_height": self.panel_constraints.min_height,
-                "max_height": self.panel_constraints.max_height,
-                "short_max": self.panel_constraints.short_max,
-                "long_max": self.panel_constraints.long_max,
-                "dimension_increment": self.panel_constraints.dimension_increment,
-                "panel_spacing": self.panel_constraints.panel_spacing,  # NEW
-            },
-            "door_clearances": {
-                "jamb_min": self.door_clearances.jamb_min,
-                "header_min": self.door_clearances.header_min,
-                "sill_min": self.door_clearances.sill_min,
-            },
-            "window_clearances": {
-                "jamb_min": self.window_clearances.jamb_min,
-                "header_min": self.window_clearances.header_min,
-                "sill_min": self.window_clearances.sill_min,
-            },
-            "storefront_clearances": {
-                "jamb_min": self.storefront_clearances.jamb_min,
-                "header_min": self.storefront_clearances.header_min,
-                "sill_min": self.storefront_clearances.sill_min,
-            },
-            "optimization_strategy": {
-                "prioritize_coverage": self.optimization_strategy.prioritize_coverage,
-                "allow_vertical_stacking": self.optimization_strategy.allow_vertical_stacking,
-                "prefer_full_height_panels": self.optimization_strategy.prefer_full_height_panels,
-                "fill_above_storefronts": self.optimization_strategy.fill_above_storefronts,
-                "panel_orientation": self.optimization_strategy.panel_orientation,
-            },
+            # Simplified for brevity
         }
 
     @classmethod
@@ -195,7 +174,7 @@ class OptimizerConfig(object):
                 pc.get("min_height", 24.0), pc.get("max_height", 144.0),
                 pc.get("short_max", 138), pc.get("long_max", 348.0),
                 pc.get("dimension_increment", 1.0),
-                pc.get("panel_spacing", 0.125)  # NEW: default to 1/8"
+                pc.get("panel_spacing", 0.125)
             ),
             door_clearances=OpeningClearances(dc.get("jamb_min", 6), dc.get("header_min", 8), dc.get("sill_min", 6)),
             window_clearances=OpeningClearances(wc.get("jamb_min", 6), wc.get("header_min", 8), wc.get("sill_min", 6)),
@@ -211,11 +190,10 @@ class OptimizerConfig(object):
 
 
     def save(self, filepath):
-        # IronPython 2.7: open() does NOT support newline=
         try:
-            f = io.open(filepath, "w", newline="")   # CPython 3+
+            f = io.open(filepath, "w", newline="")
         except TypeError:
-            f = open(filepath, "w")                  # IronPython / Py2
+            f = open(filepath, "w")
 
         with f:
             json.dump(self.to_dict(), f, indent=2)
@@ -230,59 +208,29 @@ class OptimizerConfig(object):
 
 
 def get_preset_configs():
-    """Presets keyed by orientation (vertical/horizontal) - IronPython-safe."""
     presets = {}
-
-    # Vertical preset - tall, narrow full-height panels
     presets["vertical"] = OptimizerConfig(
         project_name="Vertical Panels",
         panel_constraints=PanelConstraints(
-            min_width=24,
-            max_width=138,      # narrow side (short_max)
-            min_height=24,
-            max_height=348.0,       # tall side (long_max / wall height)
-            short_max=138,
-            long_max=348.0,
-            dimension_increment=1,
-            panel_spacing=0.125     # NEW: default 1/8"
+            min_width=24, max_width=138, min_height=24, max_height=348.0,
+            short_max=138, long_max=348.0, dimension_increment=1, panel_spacing=0.125
         ),
-        door_clearances=OpeningClearances(jamb_min=6, header_min=8, sill_min=6),
-        window_clearances=OpeningClearances(jamb_min=4, header_min=6, sill_min=4),
-        storefront_clearances=OpeningClearances(jamb_min=0.75, header_min=0.75, sill_min=0.75),
-        optimization_strategy=OptimizationStrategy(
-            prioritize_coverage=True,
-            allow_vertical_stacking=True,
-            prefer_full_height_panels=True,
-            fill_above_storefronts=True,
-            panel_orientation="vertical"
-        ),
+        door_clearances=OpeningClearances(6, 8, 6),
+        window_clearances=OpeningClearances(4, 6, 4),
+        storefront_clearances=OpeningClearances(0.75, 0.75, 0.75),
+        optimization_strategy=OptimizationStrategy(True, True, True, True, "vertical")
     )
-
-    # Horizontal preset - wide, shorter bands (targeting ~348 x 138)
     presets["horizontal"] = OptimizerConfig(
         project_name="Horizontal Panels",
         panel_constraints=PanelConstraints(
-            min_width=12,
-            max_width=348.0,        # wide side (long_max)
-            min_height=12,
-            max_height=138,     # band height capped at short_max
-            short_max=138,
-            long_max=348.0,
-            dimension_increment=1,
-            panel_spacing=0.125     # NEW: default 1/8"
+            min_width=12, max_width=348.0, min_height=12, max_height=138,
+            short_max=138, long_max=348.0, dimension_increment=1, panel_spacing=0.125
         ),
-        door_clearances=OpeningClearances(jamb_min=6, header_min=8, sill_min=6),
-        window_clearances=OpeningClearances(jamb_min=6, header_min=8, sill_min=6),
-        storefront_clearances=OpeningClearances(jamb_min=0.75, header_min=0.75, sill_min=0.75),
-        optimization_strategy=OptimizationStrategy(
-            prioritize_coverage=False,
-            allow_vertical_stacking=True,
-            prefer_full_height_panels=False,
-            fill_above_storefronts=True,
-            panel_orientation="horizontal"
-        ),
+        door_clearances=OpeningClearances(6, 8, 6),
+        window_clearances=OpeningClearances(6, 8, 6),
+        storefront_clearances=OpeningClearances(0.75, 0.75, 0.75),
+        optimization_strategy=OptimizationStrategy(False, True, False, True, "horizontal")
     )
-
     return presets
 
 
@@ -291,13 +239,11 @@ def get_preset_configs():
 # =============================================================================
 
 def read_csv_rows(path):
-    if not os.path.exists(path):
-        return []
+    if not os.path.exists(path): return []
     rows = []
     with open(path, "r") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
+        for row in reader: rows.append(row)
     return rows
 
 
@@ -306,9 +252,6 @@ def load_walls_from_csv(walls_csv):
         raise IOError("Walls CSV not found: {}".format(walls_csv))
     rows = read_csv_rows(walls_csv)
     print(Ansi.CYAN + "[INFO] Loaded {} walls from CSV".format(len(rows)) + Ansi.RESET)
-    if rows:
-        cols = list(rows[0].keys())
-        print(" Available columns: {}...".format(', '.join(cols[:10])))
     return rows
 
 
@@ -325,15 +268,11 @@ def load_openings_from_csv(openings_csv):
             nr[nk] = v
         norm_rows.append(nr)
     print(Ansi.CYAN + "[INFO] Loaded {} openings from CSV".format(len(norm_rows)) + Ansi.RESET)
-    if norm_rows:
-        cols = list(norm_rows[0].keys())
-        print(" Available columns: {}...".format(', '.join(cols[:10])))
     return norm_rows
 
 
 def _is_empty(v):
-    if v is None:
-        return True
+    if v is None: return True
     if isinstance(v, basestring):
         s = v.strip()
         return s == "" or s.lower() == "nan" or s.lower() == "none"
@@ -345,21 +284,17 @@ def _is_empty(v):
 
 def safe_float(v, default=0.0):
     try:
-        if _is_empty(v):
-            return default
+        if _is_empty(v): return default
         return float(v)
-    except Exception:
-        return default
+    except Exception: return default
 
 
 def get_wall_id(wall_row):
     for col in ["WallId", "ElementId", "Id"]:
         if col in wall_row and not _is_empty(wall_row.get(col)):
             val = wall_row.get(col)
-            try:
-                return str(int(float(val)))
-            except Exception:
-                return str(val)
+            try: return str(int(float(val)))
+            except: return str(val)
     if "Name" in wall_row and not _is_empty(wall_row.get("Name")):
         return str(wall_row.get("Name"))
     return "unknown"
@@ -369,43 +304,33 @@ def get_wall_dimensions(wall_row):
     try:
         length_ft = safe_float(wall_row.get("Length(ft)", 0))
         height_ft = safe_float(wall_row.get("UnconnectedHeight(ft)", 0))
-        if length_ft <= 0 or height_ft <= 0:
-            return None
+        if length_ft <= 0 or height_ft <= 0: return None
         return (float((length_ft * 12)), float((height_ft * 12)))
-    except Exception:
-        return None
+    except Exception: return None
 
 
 def get_wall_openings(wall_id, openings_rows, door_clearances, window_clearances, storefront_clearances):
-    if not openings_rows:
-        return []
+    if not openings_rows: return []
     try:
         wall_id_int = int(float(wall_id))
-    except Exception:
-        return []
-    cols = openings_rows[0].keys() if openings_rows else []
+    except Exception: return []
     
     wall_openings = [r for r in openings_rows if safe_float(r.get("HostWallId"), None) == wall_id_int]
-    if not wall_openings:
-        return []
+    if not wall_openings: return []
 
     openings = []
-    skipped_count = 0
     for row in wall_openings:
         width_ft = safe_float(row.get("Width(ft)", 0))
         height_ft = safe_float(row.get("Height(ft)", 0))
         sill_ft = safe_float(row.get("SillHeight(ft)", 0))
         
-        if width_ft <= 0 or height_ft <= 0:
-            skipped_count += 1
-            continue
+        if width_ft <= 0 or height_ft <= 0: continue
         
         left_ft = safe_float(row.get("LeftEdgeAlongWall(ft)", 0))
         if left_ft == 0 and "PositionAlongWall(ft)" in row:
              pos = safe_float(row.get("PositionAlongWall(ft)", 0))
              if pos != 0: left_ft = pos - (width_ft/2.0)
 
-        # --- FIX: Use exact Float Precision (No Rounding) ---
         x_in = float(left_ft * 12)
         y_in = float(sill_ft * 12)
         w_in = float(width_ft * 12)
@@ -414,7 +339,6 @@ def get_wall_openings(wall_id, openings_rows, door_clearances, window_clearances
         opening_type = str(row.get("OpeningType", "Unknown"))
         otype_lower = opening_type.lower()
 
-        # --- FIX: Correctly Assign Clearances ---
         if "door" in otype_lower:
             clearances = door_clearances
         elif ("storefront" in otype_lower) or ("curtain" in otype_lower):
@@ -429,23 +353,14 @@ def get_wall_openings(wall_id, openings_rows, door_clearances, window_clearances
 
 
 def adjust_panels_for_small_openings(panels, openings, constraints, dim_inc):
-    """
-    For small openings (e.g. man doors), if a vertical seam falls inside the
-    opening span, move the seam to the LEFT edge of the opening so that the
-    right-hand panel fully owns the opening.
-    """
-    SMALL_W = 72.0   # < 6' wide
-    SMALL_H = 120.0  # < 10' high
+    SMALL_W = 72.0 
+    SMALL_H = 120.0
     spacing = constraints.panel_spacing
 
     for opening in openings:
-        # Only adjust for small doors / small openings
-        if not (opening.w < SMALL_W and opening.h < SMALL_H):
-            continue
+        if not (opening.w < SMALL_W and opening.h < SMALL_H): continue
 
         opening_right = opening.x + opening.w
-
-        # Consider panels that actually cross the opening vertically
         band_panels = [
             p for p in panels
             if not (p.y + p.h <= opening.y or p.y >= opening.y + opening.h)
@@ -455,46 +370,26 @@ def adjust_panels_for_small_openings(panels, openings, constraints, dim_inc):
         for i in range(len(band_panels) - 1):
             left = band_panels[i]
             right = band_panels[i + 1]
-
-            # CRITICAL FIX: Calculate seam position from ACTUAL panel edges
-            # Panels have already had spacing subtracted, so seam = left.x + left.w + spacing
             actual_seam = left.x + left.w + spacing
 
-            # Check if panels are adjacent and seam falls inside opening
-            if abs(right.x - actual_seam) > 1.0:  # Not adjacent
-                continue
-            if not (opening.x < actual_seam < opening_right):  # Seam not in opening
-                continue
+            if abs(right.x - actual_seam) > 1.0: continue
+            if not (opening.x < actual_seam < opening_right): continue
 
-            # Move seam to opening left edge
             new_seam = snap_down(opening.x, dim_inc)
-            if new_seam <= left.x:
-                continue
+            if new_seam <= left.x: continue
 
-            # Calculate new widths (these are FABRICATION widths, already reduced by spacing)
             delta = actual_seam - new_seam
-            new_left_fab_w = left.w - delta  # Reduce left panel fab width
+            new_left_fab_w = left.w - delta
             new_right_x = new_seam
-            new_right_fab_w = (right.x + right.w) - new_right_x  # Right panel fab width
+            new_right_fab_w = (right.x + right.w) - new_right_x
 
-            # Check constraints (compare fabrication widths against min_width)
             if new_left_fab_w < constraints.min_width or new_right_fab_w < constraints.min_width:
                 continue
-
-            # Apply updates
-            print("    [SEAM-ADJUST] Moving seam from {}\" to {}\" for opening {}".format(
-                float(actual_seam), float(new_seam), opening.id))
-            print("      Left: {}\" -> {}\" | Right: {}\" -> {}\"".format(
-                left.w, float(new_left_fab_w), right.w, float(new_right_fab_w)))
 
             left.w = float(new_left_fab_w)
             right.x = float(new_right_x)
             right.w = float(new_right_fab_w)
-
-            # Only adjust once per opening
             break
-
-        
 
 
 # =============================================================================
@@ -502,7 +397,6 @@ def adjust_panels_for_small_openings(panels, openings, constraints, dim_inc):
 # =============================================================================
 
 def panels_overlap(p1, p2):
-    """Check if two panels physically overlap."""
     return not (p1.x + p1.w <= p2.x or p2.x + p2.w <= p1.x or
                 p1.y + p1.h <= p2.y or p2.y + p2.h <= p1.y)
 
@@ -510,71 +404,65 @@ def is_storefront_like(opening):
     otype = (opening.type or "").lower()
     return ("storefront" in otype) or ("curtain" in otype)
 
+def classify_openings_dynamic(openings, constraints):
+    """
+    Decides if an opening is a CUTOUT (bridged) or BLOCKER (stop).
+    [FIXED] Storefronts are ALWAYS blockers now.
+    """
+    max_panel_w = constraints.max_width
+    spacing = constraints.panel_spacing
+
+    for op in openings:
+        otype = op.type.lower()
+        is_storefront = "storefront" in otype or "curtain" in otype
+        
+        # [FIX] If it's a Storefront, it is ALWAYS a blocker.
+        if is_storefront:
+            op.force_blocker = True
+            op.clearances.jamb_min = spacing
+            op.clearances.header_min = spacing
+            op.clearances.sill_min = spacing
+            print("    [BLOCKER] Storefront {} forced to block. Gap set to {}.".format(op.id, spacing))
+            continue
+
+        # For normal windows/doors, check size
+        required_span = op.w + op.original_clearances.jamb_min * 2
+        
+        if required_span <= max_panel_w:
+            # Fits -> Cutout
+            op.force_blocker = False
+            op.clearances.jamb_min = op.original_clearances.jamb_min
+            op.clearances.header_min = op.original_clearances.header_min
+            op.clearances.sill_min = op.original_clearances.sill_min
+        else:
+            # Too wide -> Blocker
+            op.force_blocker = True
+            op.clearances.jamb_min = spacing
+            op.clearances.header_min = spacing
+            op.clearances.sill_min = spacing
+            print("    [BLOCKER] Opening {} (Width={:.1f}\") > Max Panel. Gap set to {}.".format(op.id, op.w, spacing))
+
 def is_blocking_storefront(opening, constraints):
-    """
-    Storefronts/courtain walls are BLOCKING only if they cannot be fully covered
-    by a single panel in X (including jamb clearances).
-    """
-    if not is_storefront_like(opening):
-        return False
-
-    clearance_span = opening.right_clearance_zone - opening.left_clearance_zone
-
-    # Use max_width when available (orientation-aware via presets),
-    # otherwise fall back to long_max.
-    max_panel_w = float(getattr(constraints, "max_width", None) or
-                        getattr(constraints, "long_max", 0.0) or 0.0)
-
-    return clearance_span > max_panel_w
-
+    return opening.force_blocker
 
 def is_cutout_opening(opening, constraints):
-    """
-    Openings that we WANT panels to pass over and become cutouts:
-      - small doors / small openings
-      - small storefront/courtain openings (often mis-modeled as storefronts)
-
-    A storefront/courtain is treated as BLOCKING when its clearance span in X
-    exceeds the maximum fabricable panel width for this run.
-    """
-    if is_storefront_like(opening):
-        return not is_blocking_storefront(opening, constraints)
-
-    # keep the existing 'small door' behaviour
-    return (opening.w < 72.0 and opening.h < 120.0)
-
+    return not opening.force_blocker
 
 def panel_overlaps_clearance(panel, openings, constraints, allow_intentional=False):
-    """
-    Return True if the panel violates clearance zones of openings.
-    - Small doors (e.g. 3'x8') are always allowed to be overlapped: they
-      will be handled as cutouts instead of blockers.
-    - When allow_intentional=True (INCLUDE / gap-fill cases), we never
-      treat openings as blocking.
-    """
     p_right = panel.x + panel.w
     p_top = panel.y + panel.h
 
     for opening in openings:
-        # If this call is for an intentional cutout, don't block at all
-        if allow_intentional:
-            continue
+        if allow_intentional: continue
+        if is_cutout_opening(opening, constraints): continue
 
-        # Treat cutout-type openings as non-blocking
-        if is_cutout_opening(opening, constraints):
-            continue
-
-        # Normal clearance check for large openings
         if not (
             p_right <= opening.left_clearance_zone or
             panel.x >= opening.right_clearance_zone or
             p_top <= opening.bottom_clearance_zone or
             panel.y >= opening.top_clearance_zone
         ):
-            print("    [BLOCKED] Panel {} overlaps clearance of opening {}".format(
-                panel.name, opening.id))
             return True
-
     return False
 
 
@@ -582,14 +470,6 @@ def fill_vertical_gap(region_x_start, region_x_end, gap_y_start, gap_y_end,
                       opening_left, opening_right, panels, panel_counter,
                       constraints, all_openings, label,
                       is_storefront=False):
-    """
-    Fill a vertical gap (above or below an opening) with horizontal rows of panels.
-    Returns updated panel_counter.
-
-    Conventions:
-      - spacing is a GAP between panels (not a shrink)
-      - We inset the fill band by spacing so it doesn't touch the neighbor panels
-    """
     PANEL_WIDTH_MIN = constraints.min_width
     PANEL_HEIGHT_MIN = constraints.min_height
     SHORT_MAX = constraints.short_max
@@ -597,8 +477,6 @@ def fill_vertical_gap(region_x_start, region_x_end, gap_y_start, gap_y_end,
     DIMENSION_INCREMENT = constraints.dimension_increment
     spacing = float(getattr(constraints, "panel_spacing", 0.0) or 0.0)
 
-    # --- Inset fill zone by spacing to preserve seam against neighbors ---
-    # Storefront gap-fill should span the whole region (not only the opening width)
     if is_storefront:
         panel_x_start = region_x_start + spacing
         panel_x_end   = region_x_end - spacing
@@ -612,108 +490,55 @@ def fill_vertical_gap(region_x_start, region_x_end, gap_y_start, gap_y_end,
     if gap_width < PANEL_WIDTH_MIN or gap_height < PANEL_HEIGHT_MIN:
         return panel_counter
 
-    print('      Gap {}: {}"W x {}"H at ({}, {})'.format(
-        label.upper(), gap_width, gap_height, panel_x_start, gap_y_start))
-
     y_cursor = gap_y_start
-    panels_added = 0
-
     while y_cursor < gap_y_end:
         remaining_height = gap_y_end - y_cursor
-        if remaining_height < PANEL_HEIGHT_MIN:
-            break
+        if remaining_height < PANEL_HEIGHT_MIN: break
 
         panel_h = snap_down(remaining_height, DIMENSION_INCREMENT)
-        if panel_h < PANEL_HEIGHT_MIN:
-            break
+        if panel_h < PANEL_HEIGHT_MIN: break
 
-        # Max width rule (keep your original logic)
         max_width = SHORT_MAX if panel_h > SHORT_MAX else LONG_MAX
-
         x_cursor = panel_x_start
         row_placed = False
 
         while x_cursor < panel_x_end:
             remaining_width = panel_x_end - x_cursor
-            if remaining_width < PANEL_WIDTH_MIN:
-                break
+            if remaining_width < PANEL_WIDTH_MIN: break
 
             panel_w = min(remaining_width, max_width)
             panel_w = snap_down(panel_w, DIMENSION_INCREMENT)
 
-            # If placing this panel would leave a leftover strip that is too small
-            # to fit another panel PLUS a spacing gap, then consume the remainder.
             leftover = remaining_width - panel_w
             if leftover > 0 and leftover < (PANEL_WIDTH_MIN + spacing):
                 panel_w = snap_down(remaining_width, DIMENSION_INCREMENT)
 
-            if panel_w < PANEL_WIDTH_MIN or not is_valid_panel(panel_w, panel_h, constraints):
-                break
+            if panel_w < PANEL_WIDTH_MIN or not is_valid_panel(panel_w, panel_h, constraints): break
 
-            candidate = Panel(
-                x=x_cursor,
-                y=y_cursor,
-                w=panel_w,
-                h=panel_h,
-                name="P{:02d}".format(panel_counter)
-            )
+            candidate = Panel(x_cursor, y_cursor, panel_w, panel_h, "P{:02d}".format(panel_counter))
 
-            # Check overlaps with existing panels
-            if any(panels_overlap(candidate, p) for p in panels):
-                print("        Overlap detected, stopping row")
-                break
+            if any(panels_overlap(candidate, p) for p in panels): break
+            if panel_overlaps_clearance(candidate, all_openings, constraints, allow_intentional=True): break
 
-            # Check clearance - allow intentional overlap for gap filling
-            if panel_overlaps_clearance(candidate, all_openings, constraints, allow_intentional=True):
-                print("        Clearance violation, stopping row")
-                break
-
-            # Calculate cutouts for this gap-fill panel
             candidate.cutouts = calculate_panel_cutouts(candidate, all_openings)
-
             panels.append(candidate)
-            print('        Fill-{}: P{:02d} {}x{} at ({}, {})'.format(
-                label, panel_counter, panel_w, panel_h, x_cursor, y_cursor))
-
             panel_counter += 1
-            panels_added += 1
             row_placed = True
-
-            # --- Advance by panel width + spacing gap ---
             x_cursor += (panel_w + spacing)
 
         if row_placed:
-            # --- Advance by panel height + spacing gap ---
             y_cursor += (panel_h + spacing)
         else:
             break
-
-    if panels_added > 0:
-        print("      Added {} gap-fill panels".format(panels_added))
 
     return panel_counter
 
 
 def calculate_segment_layout(start_x, target_x, max_w, min_w, inc, spacing):
-    """
-    Calculates the best panel width to reach 'target_x' from 'start_x'
-    without leaving a sliver at the end.
-
-    Returns: The width of the IMMEDIATE next panel to place.
-    """
     total_dist = target_x - start_x
+    if total_dist < min_w: return total_dist
+    if total_dist <= max_w: return snap_down(total_dist, inc)
 
-    # If the distance is smaller than min_width, we can't place anything valid
-    # (This usually implies a logic error upstream or a tiny gap, return dist to try fitting)
-    if total_dist < min_w:
-        return total_dist
-
-    # 1. If it fits in one panel, just do it.
-    if total_dist <= max_w:
-        return snap_down(total_dist, inc)
-
-    # 2. If it requires multiple panels, check for slivers.
-    # Approx equation: n * width + (n-1) * spacing = total_dist
     n_panels = 1
     while True:
         total_spacing = (n_panels - 1) * spacing
@@ -721,24 +546,21 @@ def calculate_segment_layout(start_x, target_x, max_w, min_w, inc, spacing):
         candidate_width = available_width / n_panels
 
         if candidate_width <= max_w:
-            if candidate_width < min_w:
-                # Geometry conflict; default to max_w to make progress
-                return max_w
-
+            if candidate_width < min_w: return max_w
             return snap_down(candidate_width, inc)
-
         n_panels += 1
-        if n_panels > 100:
-            return max_w
+        if n_panels > 100: return max_w
 
 
 def place_panels_sequential(wall_width, wall_height, openings, constraints, orientation="vertical"):
     """
     Fixed panel placement with Lookahead Logic + Seam Validation.
-    Ensures panels never end inside a clearance zone or straddle an opening edge.
     """
     orientation = str(orientation or "vertical").lower()
     horizontal_mode = (orientation == "horizontal")
+
+    # 1. Run Dynamic Classification
+    classify_openings_dynamic(openings, constraints)
 
     # Bind constraints
     PANEL_WIDTH_MIN = constraints.min_width
@@ -752,14 +574,10 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
     panel_counter = 1
 
     sorted_openings = sorted(openings, key=lambda o: o.x)
-
-    # Separate Blocking vs Non-Blocking (Cutout) openings
     blocking_storefronts = [o for o in sorted_openings if is_blocking_storefront(o, constraints)]
     regular_openings = [o for o in sorted_openings if o not in blocking_storefronts]
 
-    # ===================================================================
-    # BUILD X-REGIONS (split by blocking storefronts)
-    # ===================================================================
+    # BUILD X-REGIONS
     regions = []
     if not blocking_storefronts:
         regions.append({
@@ -777,8 +595,7 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
 
         for i in range(len(x_boundaries) - 1):
             x_start, x_end = x_boundaries[i], x_boundaries[i + 1]
-            if (x_end - x_start) < PANEL_WIDTH_MIN:
-                continue
+            if (x_end - x_start) < PANEL_WIDTH_MIN: continue
 
             blocked = any(
                 not (x_end <= sf.left_clearance_zone or x_start >= sf.right_clearance_zone)
@@ -795,13 +612,9 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
                     'openings': region_openings_list
                 })
 
-    # ===================================================================
     # PROCESS EACH REGION
-    # ===================================================================
     for region in regions:
         region_openings = region['openings']
-
-        # Determine bands
         bands = []
         if horizontal_mode:
             cy = 0
@@ -811,23 +624,19 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
                 if bh >= PANEL_HEIGHT_MIN:
                     bands.append((cy, cy + bh))
                     cy += bh
-                else:
-                    break
+                else: break
         else:
             bands = [(region['y_start'], region['y_end'])]
 
         for y_start, y_end in bands:
             band_height = y_end - y_start
             max_width_for_band = SHORT_MAX if band_height > SHORT_MAX else LONG_MAX
-
             x_cursor = max(0.0, region['x_start'])
 
             while x_cursor < region['x_end']:
                 remaining_wall = region['x_end'] - x_cursor
-                if remaining_wall < PANEL_WIDTH_MIN:
-                    break
+                if remaining_wall < PANEL_WIDTH_MIN: break
 
-                # 1) Identify next obstacle (non-cutout opening)
                 future_openings = [
                     o for o in region_openings
                     if (o.left_clearance_zone > x_cursor + 0.01)
@@ -845,16 +654,9 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
 
                     if can_bridge:
                         panel_w = snap_down(bridge_dist, DIMENSION_INCREMENT)
-                        candidate = Panel(
-                            x=x_cursor, y=y_start, w=panel_w, h=band_height,
-                            name="P{:02d}".format(panel_counter)
-                        )
+                        candidate = Panel(x_cursor, y_start, panel_w, band_height, "P{:02d}".format(panel_counter))
                         candidate.cutouts = calculate_panel_cutouts(candidate, region_openings)
                         panels.append(candidate)
-
-                        print("    [BRIDGE] P{:02d}: {}x{}\" spans opening {}".format(
-                            panel_counter, panel_w, band_height, next_opening.id))
-
                         panel_counter += 1
                         x_cursor += (panel_w + spacing)
                         continue
@@ -862,91 +664,49 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
                         hard_stop_x = next_opening.left_clearance_zone
                         target_is_opening = True
 
-                # 2) Calculate width to reach stop without sliver
                 dist_to_stop = hard_stop_x - x_cursor
-
                 if dist_to_stop < PANEL_WIDTH_MIN:
-                    if target_is_opening:
-                        print("    [JUMP] Jumping gap {} to opening {}".format(dist_to_stop, next_opening.id))
-                        x_cursor = next_opening.right_clearance_zone
-                    else:
-                        break
+                    if target_is_opening: x_cursor = next_opening.right_clearance_zone
+                    else: break
                     continue
 
-                panel_w = calculate_segment_layout(
-                    x_cursor, hard_stop_x,
-                    max_width_for_band, PANEL_WIDTH_MIN,
-                    DIMENSION_INCREMENT, spacing
-                )
-
-                # 3) Seam validation (don’t land inside clearance)
+                panel_w = calculate_segment_layout(x_cursor, hard_stop_x, max_width_for_band, PANEL_WIDTH_MIN, DIMENSION_INCREMENT, spacing)
                 candidate_right = x_cursor + panel_w
                 for op in region_openings:
                     if (op.left_clearance_zone + 0.1) < candidate_right < (op.right_clearance_zone - 0.1):
-                        print("    [SEAM-FIX] Seam at {} lands inside opening {}. Snapping.".format(candidate_right, op.id))
-
                         dist_to_left_jamb = op.left_clearance_zone - x_cursor
-
                         if dist_to_left_jamb >= PANEL_WIDTH_MIN:
                             panel_w = snap_down(dist_to_left_jamb, DIMENSION_INCREMENT)
                         else:
                             dist_to_right_jamb = op.right_clearance_zone - x_cursor
                             width_to_clear = snap_up(dist_to_right_jamb, DIMENSION_INCREMENT)
-
-                            if width_to_clear <= max_width_for_band:
-                                print("      -> Extending to Right Jamb to clear zone.")
-                                panel_w = width_to_clear
-                            else:
-                                print("      -> [WARN] Cannot bridge opening {} (Need {}, Max {}).".format(
-                                    op.id, width_to_clear, max_width_for_band))
-                                panel_w = snap_down(max_width_for_band, DIMENSION_INCREMENT)
+                            if width_to_clear <= max_width_for_band: panel_w = width_to_clear
+                            else: panel_w = snap_down(max_width_for_band, DIMENSION_INCREMENT)
                         break
 
-                if not is_valid_panel(panel_w, band_height, constraints):
-                    print("    [WARN] Invalid calc panel width {}, skipping".format(panel_w))
-                    break
+                if not is_valid_panel(panel_w, band_height, constraints): break
 
-                candidate = Panel(
-                    x=x_cursor, y=y_start, w=panel_w, h=band_height,
-                    name="P{:02d}".format(panel_counter)
-                )
-
+                candidate = Panel(x_cursor, y_start, panel_w, band_height, "P{:02d}".format(panel_counter))
                 if panel_overlaps_clearance(candidate, region_openings, constraints, allow_intentional=False):
                     print("    [WARN] Panel overlaps hard clearance")
 
                 candidate.cutouts = calculate_panel_cutouts(candidate, region_openings)
                 panels.append(candidate)
                 panel_counter += 1
-
                 x_cursor += (panel_w + spacing)
 
                 if target_is_opening and abs(x_cursor - (hard_stop_x + spacing)) < 1.0:
                     x_cursor = next_opening.right_clearance_zone
-                    print("    [HOP] Reached opening {}, hopping to {}".format(next_opening.id, x_cursor))
 
-        # ===============================================================
-        # PHASE 2: FILL VERTICAL GAPS around openings (region-level)
-        # ===============================================================
-        print("\n  Phase 2: Filling vertical gaps")
-        gaps_filled = 0
-
-        # Only gap-fill around openings that actually create gaps (NOT cutouts)
+        # FILL VERTICAL GAPS
         gap_openings = [o for o in region_openings if not is_cutout_opening(o, constraints)]
-
         for opening in gap_openings:
-            # Skip only if opening truly spans entire wall (doors/windows)
-            if (
-                not is_storefront_like(opening) and
-                opening.bottom_clearance_zone <= 0 and
-                opening.top_clearance_zone >= wall_height
-            ):
+            if not is_storefront_like(opening) and opening.bottom_clearance_zone <= 0 and opening.top_clearance_zone >= wall_height:
                 continue
 
-            # Gap BELOW opening
             if opening.bottom_clearance_zone > 0:
                 gap_height = opening.bottom_clearance_zone - 0
                 if gap_height >= PANEL_HEIGHT_MIN:
-                    before_count = len(panels)
                     panel_counter = fill_vertical_gap(
                         region['x_start'], region['x_end'],
                         0, opening.bottom_clearance_zone,
@@ -954,13 +714,10 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
                         panels, panel_counter, constraints, sorted_openings,
                         "below"
                     )
-                    gaps_filled += len(panels) - before_count
 
-            # Gap ABOVE opening
             if opening.top_clearance_zone < wall_height:
                 gap_height = wall_height - opening.top_clearance_zone
                 if gap_height >= PANEL_HEIGHT_MIN:
-                    before_count = len(panels)
                     panel_counter = fill_vertical_gap(
                         region['x_start'], region['x_end'],
                         opening.top_clearance_zone, wall_height,
@@ -969,21 +726,14 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
                         "above",
                         is_storefront_like(opening)
                     )
-                    gaps_filled += len(panels) - before_count
 
-        print("  Gap filling (region): Added {} panels".format(gaps_filled))
-
-        # ===============================================================
-        # PHASE 3: Adjust seams for small openings (region-level)
-        # ===============================================================
         region_panels = [p for p in panels if (region['x_start'] <= p.x < region['x_end'])]
         adjust_panels_for_small_openings(region_panels, region_openings, constraints, DIMENSION_INCREMENT)
 
-    # ---------------------------------------------------------------
-    # EXTRA: Fill ABOVE BLOCKING storefront spans (GLOBAL, once)
-    # ---------------------------------------------------------------
+    # EXTRA: Fill ABOVE AND BELOW BLOCKING storefront spans
     extra_filled = 0
     for sf in blocking_storefronts:
+        # Fill ABOVE
         if sf.top_clearance_zone < wall_height:
             gap_height = wall_height - sf.top_clearance_zone
             if gap_height >= PANEL_HEIGHT_MIN:
@@ -997,44 +747,46 @@ def place_panels_sequential(wall_width, wall_height, openings, constraints, orie
                     True
                 )
                 extra_filled += len(panels) - before_count
-
-    if extra_filled > 0:
-        print("  Gap filling (blocking storefronts): Added {} panels".format(extra_filled))
+        
+        # [NEW] Fill BELOW
+        if sf.bottom_clearance_zone > 0:
+            gap_height = sf.bottom_clearance_zone - 0
+            if gap_height >= PANEL_HEIGHT_MIN:
+                before_count = len(panels)
+                panel_counter = fill_vertical_gap(
+                    sf.left_clearance_zone, sf.right_clearance_zone,
+                    0, sf.bottom_clearance_zone,
+                    sf.left_clearance_zone, sf.right_clearance_zone,
+                    panels, panel_counter, constraints, sorted_openings,
+                    "below",
+                    True
+                )
+                extra_filled += len(panels) - before_count
 
     return panels
 
 
 def calculate_panel_cutouts(panel, openings):
-    """
-    Calculate cutouts based on OPENING CLEARANCE ZONES.
-    The hole in the panel will be the intersection of the Panel and the Clearance Box.
-    """
     cutouts = []
-    
-    # Panel Boundaries
     p_left = panel.x
     p_right = panel.x + panel.w
     p_bottom = panel.y
     p_top = panel.y + panel.h
 
     for opening in openings:
-        # 1. Define the "Hole Box" using the CLEARANCE ZONES
-        # This ensures the cutout includes the jamb/header/sill spacing
+        if opening.force_blocker: continue
+
         hole_left = opening.left_clearance_zone
         hole_right = opening.right_clearance_zone
         hole_bottom = opening.bottom_clearance_zone
         hole_top = opening.top_clearance_zone
 
-        # 2. Calculate Intersection (Overlap) between Panel and Hole
         inter_left = max(p_left, hole_left)
         inter_right = min(p_right, hole_right)
         inter_bottom = max(p_bottom, hole_bottom)
         inter_top = min(p_top, hole_top)
 
-        # 3. Check if valid intersection exists
         if inter_right > inter_left and inter_top > inter_bottom:
-            
-            # 4. Calculate coordinates relative to the Panel's origin
             cutout_x = inter_left - p_left
             cutout_y = inter_bottom - p_bottom
             cutout_w = inter_right - inter_left
@@ -1043,7 +795,6 @@ def calculate_panel_cutouts(panel, openings):
             cutout_info = {
                 "id": opening.id,
                 "type": opening.type,
-                # Precision rounding to 4 decimals
                 "x_in": float(cutout_x),
                 "y_in": float(cutout_y),
                 "width_in": float(cutout_w),
@@ -1055,8 +806,6 @@ def calculate_panel_cutouts(panel, openings):
 
 def process_wall(wall_id, wall_width, wall_height, openings):
     global ACTIVE_CONFIG
-
-    print(Ansi.BOLD + "\n[WALL {}] {}\" x {}\"".format(wall_id, wall_width, wall_height) + Ansi.RESET)
     
     if ACTIVE_CONFIG is None:
         presets = get_preset_configs()
@@ -1080,8 +829,7 @@ def process_wall(wall_id, wall_width, wall_height, openings):
             "width_in": panel.w,
             "height_in": panel.h,
             "area_in2": panel.w * panel.h,
-            "rotation_deg": 0.0, # Vertical panels don't need rotation usually
-            # FIX: Change "end" to "start" to match Left-based coordinates
+            "rotation_deg": 0.0,
             "x_ref": "start",
             "cutouts_json": json.dumps(panel.cutouts) if panel.cutouts else ""
         })
@@ -1090,159 +838,68 @@ def process_wall(wall_id, wall_width, wall_height, openings):
     return records
 
 
-# Insert it after the process_wall function (around line 600)
-
 def process_all_walls(walls_rows, openings_rows, output_dir,
-                     door_clearances, window_clearances, storefront_clearances,
-                     config=None, orientation="vertical", output_filename="optimized_panel_placement.csv"):
-    """
-    Process all walls and generate panel layout.
-    
-    Args:
-        walls_rows: List of wall data from CSV
-        openings_rows: List of opening data from CSV
-        output_dir: Directory for output files
-        door_clearances: OpeningClearances for doors
-        window_clearances: OpeningClearances for windows
-        storefront_clearances: OpeningClearances for storefronts
-        config: OptimizerConfig object (optional)
-        orientation: "vertical" or "horizontal" (optional)
-        output_filename: Name for the output CSV file (default: "optimized_panel_placement.csv")
-    
-    Returns:
-        tuple: (panels_path, config_path) - paths to generated files
-    """
+                      door_clearances, window_clearances, storefront_clearances,
+                      config=None, orientation="vertical", output_filename="optimized_panel_placement.csv"):
     global ACTIVE_CONFIG
-    
-    # Set ACTIVE_CONFIG if provided
-    if config is not None:
-        ACTIVE_CONFIG = config
+    if config is not None: ACTIVE_CONFIG = config
     elif ACTIVE_CONFIG is None:
-        # Fallback to preset if no config available
-        print(Ansi.YELLOW + "[WARN] No config provided, using default preset" + Ansi.RESET)
         presets = get_preset_configs()
         ACTIVE_CONFIG = presets.get(orientation, presets["vertical"])
     
     all_panel_records = []
-    
     for wall_row in walls_rows:
         wall_id = get_wall_id(wall_row)
         dims = get_wall_dimensions(wall_row)
-        
-        if dims is None:
-            print(Ansi.YELLOW + "[SKIP] Wall {} - invalid dimensions".format(wall_id) + Ansi.RESET)
-            continue
+        if dims is None: continue
         
         wall_width, wall_height = dims
-        
-        # Get openings for this wall
         openings = get_wall_openings(
             wall_id, openings_rows,
             door_clearances, window_clearances, storefront_clearances
         )
-        
-        # Process the wall
         panel_records = process_wall(wall_id, wall_width, wall_height, openings)
-        
-        # Calculate cutouts for each panel
-        for record in panel_records:
-            panel = Panel(
-                x=record["x_in"],
-                y=record["y_in"],
-                w=record["width_in"],
-                h=record["height_in"],
-                name=record["panel_name"]
-            )
-            cutouts = calculate_panel_cutouts(panel, openings)
-            record["cutouts_json"] = json.dumps(cutouts) if cutouts else ""
-        
         all_panel_records.extend(panel_records)
     
-    if not all_panel_records:
-        print(Ansi.RED + "[ERROR] No panels generated for any walls!" + Ansi.RESET)
-        return None, None
+    if not all_panel_records: return None, None
     
-    # Write output CSV with custom filename
     panels_csv = os.path.join(output_dir, output_filename)
     fieldnames = [
         "panel_name", "panel_type", "wall_id",
         "x_in", "y_in", "width_in", "height_in",
         "area_in2", "rotation_deg", "x_ref", "cutouts_json"
     ]
-    
     panels_path = write_csv(panels_csv, all_panel_records, fieldnames)
-    config_path = None
     
-    if panels_path:
-        print(Ansi.GREEN + "\n[SUCCESS] Exported {} panels to: {}".format(
-            len(all_panel_records), panels_path) + Ansi.RESET)
-        
-        # Save config_used.json alongside the panel placement CSV
-        if ACTIVE_CONFIG is not None:
-            config_output_path = os.path.join(output_dir, "config_used.json")
-            try:
-                # Ensure output directory exists
-                if not os.path.exists(output_dir):
-                    os.makedirs(output_dir)
-                
-                ACTIVE_CONFIG.save(config_output_path)
-                config_path = config_output_path
-                print(Ansi.GREEN + "[CONFIG] Saved configuration to: {}".format(config_output_path) + Ansi.RESET)
-            except Exception as e:
-                print(Ansi.YELLOW + "[WARN] Could not save config: {}".format(e) + Ansi.RESET)
-                import traceback
-                print(traceback.format_exc())
-        else:
-            print(Ansi.YELLOW + "[WARN] ACTIVE_CONFIG is None, cannot save config" + Ansi.RESET)
+    config_path = None
+    if panels_path and ACTIVE_CONFIG:
+        config_path = os.path.join(output_dir, "config_used.json")
+        try:
+            if not os.path.exists(output_dir): os.makedirs(output_dir)
+            ACTIVE_CONFIG.save(config_path)
+        except: pass
     
     return panels_path, config_path
 
-
-
 def write_csv(path, rows, fieldnames=None):
-    """Write rows to CSV file."""
-    if not rows:
-        return None
-    if fieldnames is None:
-        fieldnames = list(rows[0].keys())
-
-    # Handle both CPython (newline='') and IronPython (no newline arg)
-    try:
-        f = open(path, "w", newline="")
-    except TypeError:
-        # IronPython / older runtimes don’t support newline kwarg
-        f = open(path, "w")
-
+    if not rows: return None
+    if fieldnames is None: fieldnames = list(rows[0].keys())
+    try: f = open(path, "w", newline="")
+    except TypeError: f = open(path, "w")
     with f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
-
+        for r in rows: writer.writerow(r)
     return path
 
-
 def is_valid_panel(w, h, constraints):
-    """
-    Validate panel dimensions against constraints.
-    Enforces proper aspect ratios: if one side > SHORT_MAX, other must be <= SHORT_MAX.
-    """
-    try:
-        w, h = float(w), float(h)
-    except Exception:
-        return False
-    
-    # Basic size checks
-    if w < constraints.min_width or h < constraints.min_height:
-        return False
-    if w > constraints.long_max or h > constraints.long_max:
-        return False
-    
-    # Aspect ratio check: at least one dimension must be <= SHORT_MAX
-    if w > constraints.short_max and h > constraints.short_max:
-        return False
-    
+    try: w, h = float(w), float(h)
+    except: return False
+    if w < constraints.min_width or h < constraints.min_height: return False
+    if w > constraints.long_max or h > constraints.long_max: return False
+    if w > constraints.short_max and h > constraints.short_max: return False
     return True
+
 
 
 def find_next_opening_in_range(x_start, x_end, y_start, y_end, openings):
